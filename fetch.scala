@@ -6,15 +6,16 @@ import org.rogach.scallop._
 import scala.collection.JavaConverters._
 import scala.util.control.Exception._
 import scala.util.Try
+import sys.process._
 import wvlet.log.LogSupport
+
+
+import java.nio.file.{Paths, Files}
+import java.nio.charset.StandardCharsets
 
 import java.time._
 import java.time.format._
-
-object weasyprint {
-  def toPDF(htmlFilename: String): Unit = {
-  }
-}
+import java.io.File
 
 object nytimes {
   val baseUrl = "https://www.nytimes.com/"
@@ -25,6 +26,7 @@ object nytimes {
 
   case class Briefing(date: LocalDate, url: String, name: String, htmlFilename: String)  {
     def pdfFilename = htmlFilename.replaceAllLiterally(".html", ".pdf")
+    def fetchDoc = Jsoup.connect(s"$baseUrl$url").get()
   }
 
   def toBriefing(node: nodes.Element): Option[Briefing] = {
@@ -51,15 +53,30 @@ object nytimes {
   def briefingsData(doc: nodes.Document): Option[nodes.Element] = 
     doc.select("script").asScala
       .filter(_.data().startsWith("window.__preloadedData = "))
-      .take(1)
+      .take(2)
       .headOption
 
-  def downloadAndProcessBriefing(briefing: Briefing): Briefing = briefing
+  def write(path: String, txt: String): Unit = {
+    Files.write(Paths.get(path), txt.getBytes(StandardCharsets.UTF_8))
+  }
+
+  def downloadAndProcessBriefing(targetDirectory: Path, briefing: Briefing): Unit = {
+    val doc = briefing.fetchDoc
+    write((targetDirectory/briefing.htmlFilename).toString, doc.toString())
+  }
+
+  def toPDF(targetDirectory: Path, briefing: Briefing): Unit = {
+    val inputFile = targetDirectory/briefing.htmlFilename
+    val outputFile = targetDirectory/briefing.pdfFilename
+    s"weasyprint $inputFile $outputFile".!
+  }
 }
 
 object fetch extends LogSupport  {
 
-  def exists(p: Path) = Try{stat! p}.toOption.map(_.isFile) getOrElse false
+  def statFile(p: Path) = Try{stat! p}.toOption
+  def isFile(p: Path) = statFile(p).map(_.isFile) getOrElse false
+  def isDirectory(p: Path) = statFile(p).map(_.isFile) getOrElse false
 
   class Conf(arguments: Seq[String]) extends ScallopConf(arguments) {
     val targetDirectory = opt[String](required = true)
@@ -69,23 +86,26 @@ object fetch extends LogSupport  {
   def main(args: Array[String]): Unit = {
     val conf = new Conf(args)
     val targetDirectory = Path(conf.targetDirectory());
-    println(targetDirectory)
-    if (! (stat! targetDirectory).isDir) {
+    if (!isDirectory(targetDirectory)) {
       mkdir! targetDirectory
     }
     info("Downloading briefings")
     val doc = nytimes.fetchBriefingsDoc
     val briefings = nytimes.parseBriefings(doc)
     info(f"Found ${briefings.length}")
+
     briefings
+      .sortBy(_.date)
       .reverse
-      .take(1)
-      .filterNot(briefing => exists(targetDirectory/briefing.pdfFilename))
-      .foreach(briefing => {
+      .take(2)
+      .filterNot(briefing => isFile(targetDirectory/briefing.pdfFilename))
+      .tapEach(briefing => {
         info(f"Processing ${briefing.htmlFilename}")
-        nytimes.downloadAndProcessBriefing(briefing)
+        nytimes.downloadAndProcessBriefing(targetDirectory, briefing)
+      })
+      .tapEach(briefing => {
         info(f"Turning into pdf ${briefing.pdfFilename}")
-        weasyprint.toPDF((targetDirectory/briefing.htmlFilename).toString)
+        nytimes.toPDF(targetDirectory, briefing)
       })
   }
 }

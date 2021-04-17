@@ -1,3 +1,5 @@
+scalaVersion := "2.13.5"
+
 libraryDependencies +="org.jsoup" % "jsoup" % "1.11.3"
 libraryDependencies += "org.typelevel" %% "cats-core" % "2.3.0"
 

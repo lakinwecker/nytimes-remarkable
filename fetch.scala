@@ -1,12 +1,12 @@
+import ammonite.ops._
 import cats.implicits._
 import io.chrisdavenport.cats.time._
 import org.jsoup._
+import org.rogach.scallop._
 import scala.collection.JavaConverters._
 import scala.util.control.Exception._
-import scala.util.{Try}
-import ammonite.ops._
+import scala.util.Try
 import wvlet.log.LogSupport
-import org.rogach.scallop._
 
 import java.time._
 import java.time.format._

@@ -5,6 +5,8 @@ import scala.collection.JavaConverters._
 import scala.util.control.Exception._
 import scala.util.{Try}
 
+import org.rogach.scallop._
+
 import java.time._
 import java.time.format._
 
@@ -44,7 +46,15 @@ object nytimes {
 }
 
 object fetch {
+
+  class Conf(arguments: Seq[String]) extends ScallopConf(arguments) {
+    val targetDirectory = opt[String](required = true)
+    verify()
+  }
+
   def main(args: Array[String]): Unit = {
+    val conf = new Conf(args)
+    println(conf.targetDirectory())
     val doc = nytimes.fetchBriefingsDoc
     println(nytimes.parseBriefings(doc).map(_.url))
     println(nytimes.parseBriefings(doc).map(_.date))

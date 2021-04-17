@@ -4,11 +4,17 @@ import org.jsoup._
 import scala.collection.JavaConverters._
 import scala.util.control.Exception._
 import scala.util.{Try}
-
+import ammonite.ops._
+import wvlet.log.LogSupport
 import org.rogach.scallop._
 
 import java.time._
 import java.time.format._
+
+object weasyprint {
+  def toPDF(htmlFilename: String): Unit = {
+  }
+}
 
 object nytimes {
   val baseUrl = "https://www.nytimes.com/"
@@ -17,16 +23,20 @@ object nytimes {
   def dbg[A](f: A): A = { println(f); f }
   def urlToName(s: String) = s.replaceAllLiterally(".html", "").split("-").map(_.capitalize).mkString(" ")
 
-  case class Briefing(date: LocalDate, url: String, name: String)
+  case class Briefing(date: LocalDate, url: String, name: String, htmlFilename: String)  {
+    def pdfFilename = htmlFilename.replaceAllLiterally(".html", ".pdf")
+  }
 
   def toBriefing(node: nodes.Element): Option[Briefing] = {
     val url = node.attr("href")
     val dateFormat = DateTimeFormatter.ofPattern("yyyy/MM/dd")
     val dateString = url.stripPrefix("/").split('/').take(3).mkString("/")
+    val htmlFilename = url.split('/').lastOption
     for {
        date <- Try{LocalDate.parse(dateString, dateFormat)}.toOption
-       name <- url.split('/').lastOption.map(urlToName)
-    } yield new Briefing(date, url, name)
+       name <- htmlFilename.map(urlToName)
+       htmlFilename <- htmlFilename
+    } yield new Briefing(date, url, name, htmlFilename)
 
   }
 
@@ -43,9 +53,13 @@ object nytimes {
       .filter(_.data().startsWith("window.__preloadedData = "))
       .take(1)
       .headOption
+
+  def downloadAndProcessBriefing(briefing: Briefing): Briefing = briefing
 }
 
-object fetch {
+object fetch extends LogSupport  {
+
+  def exists(p: Path) = Try{stat! p}.toOption.map(_.isFile) getOrElse false
 
   class Conf(arguments: Seq[String]) extends ScallopConf(arguments) {
     val targetDirectory = opt[String](required = true)
@@ -54,10 +68,24 @@ object fetch {
 
   def main(args: Array[String]): Unit = {
     val conf = new Conf(args)
-    println(conf.targetDirectory())
+    val targetDirectory = Path(conf.targetDirectory());
+    println(targetDirectory)
+    if (! (stat! targetDirectory).isDir) {
+      mkdir! targetDirectory
+    }
+    info("Downloading briefings")
     val doc = nytimes.fetchBriefingsDoc
-    println(nytimes.parseBriefings(doc).map(_.url))
-    println(nytimes.parseBriefings(doc).map(_.date))
-    println(nytimes.parseBriefings(doc))
+    val briefings = nytimes.parseBriefings(doc)
+    info(f"Found ${briefings.length}")
+    briefings
+      .reverse
+      .take(1)
+      .filterNot(briefing => exists(targetDirectory/briefing.pdfFilename))
+      .foreach(briefing => {
+        info(f"Processing ${briefing.htmlFilename}")
+        nytimes.downloadAndProcessBriefing(briefing)
+        info(f"Turning into pdf ${briefing.pdfFilename}")
+        weasyprint.toPDF((targetDirectory/briefing.htmlFilename).toString)
+      })
   }
 }

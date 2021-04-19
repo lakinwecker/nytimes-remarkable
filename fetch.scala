@@ -109,7 +109,6 @@ object nytimes extends LogSupport {
     val doc = briefing.fetchDoc
     val data = briefingsData(doc)
     data.map(json => {
-      write((targetDirectory/s"data${briefing.htmlFilename}.json").toString, json)  
       parse(json) match {
         case Right(obj) => {
           val images = getImages(obj).drop(1)

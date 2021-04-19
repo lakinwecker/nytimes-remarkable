@@ -112,13 +112,19 @@ object nytimes extends LogSupport {
       write((targetDirectory/s"data${briefing.htmlFilename}.json").toString, json)  
       parse(json) match {
         case Right(obj) => {
+          val images = getImages(obj).drop(1)
+          val elements = doc.select("""figure div[data-testid="lazyimage-container"]""").iterator().asScala
           for {
-            element <- doc.select("figure").iterator().asScala
-            url <- getImages(obj)
+            (url, element) <- (images zip elements)
           } {
-            element.appendElement(
-              f"""<img class="css-doesntmatter" src="${url}?quality=75&amp;auto=webp&amp;disable=upscale" srcset="" decoding="async" loading="lazy">"""
-            )
+            element.attr("style", "height: auto")
+            val picture = element.appendElement("picture")
+            picture.attr("style", "opacity: 1; display: block; width: 100%")
+            val img = picture.appendElement("img")
+            img.attr("class", "css-doesntmattr");
+            img.attr("src", f"${url}?quality=75&amp;auto=webp&amp;disable=upscale")
+            img.attr("decoding", "async")
+            img.attr("style", "width:100%;vertical-align:top; height: auto; max-width: 100%")
           }
         }
         case Left(err) => error(s"Unable to find data for images: $err")

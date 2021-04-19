@@ -3,9 +3,12 @@ import cats.implicits._
 import io.chrisdavenport.cats.time._
 import org.jsoup._
 import org.rogach.scallop._
+import io.circe._
+import io.circe.parser._
 import scala.collection.JavaConverters._
 import scala.util.control.Exception._
 import scala.util.Try
+import scala.util.chaining._
 import sys.process._
 import wvlet.log.LogSupport
 
@@ -17,7 +20,7 @@ import java.time._
 import java.time.format._
 import java.io.File
 
-object nytimes {
+object nytimes extends LogSupport {
   val baseUrl = "https://www.nytimes.com/"
   val briefingsListings = "spotlight/us-briefing"
 
@@ -50,18 +53,77 @@ object nytimes {
       .flatMap(toBriefing)
       .toList
 
-  def briefingsData(doc: nodes.Document): Option[nodes.Element] = 
+  val prefix = "window.__preloadedData = "
+  def briefingsData(doc: nodes.Document): Option[String] = {
     doc.select("script").asScala
-      .filter(_.data().startsWith("window.__preloadedData = "))
-      .take(2)
+      .filter(_.data().startsWith(prefix))
+      .take(1)
       .headOption
+      .map(_.data().replaceAllLiterally(prefix, "").dropRight(1))
+    }
 
   def write(path: String, txt: String): Unit = {
     Files.write(Paths.get(path), txt.getBytes(StandardCharsets.UTF_8))
   }
 
+  def keyHasValue(key: String, value: String)(hcursor: ACursor) =
+    hcursor.get[String](key).toOption.fold(false)(_ == value)
+
+  // TODO: this code is nasty, but it was the first thing I go working. :D
+  def getImages(json: Json): List[String] = {
+    val hcursor = json.hcursor.downField("initialState")
+    hcursor.keys
+      .fold(List[String]())(
+        _.filterNot(_.endsWith("ledeMedia"))
+          .map(hcursor.downField)
+          .filter(keyHasValue("__typename", "ImageBlock"))
+          .map(_.downField("media"))
+          .filter(keyHasValue("typename", "Image"))
+          .flatMap(_.get[String]("id").toOption)
+          .map(k => hcursor.downField(k))
+          .flatMap(lens => {
+            lens.keys.map(
+              _.filter(_.startsWith("crops"))
+                .map(lens.downField)
+                .flatMap(_.values)
+                .flatten
+                .flatMap(_.hcursor.get[String]("id").toOption)
+            )
+          })
+          .flatten
+          .map(hcursor.downField)
+          //.flatMap(_.focus)
+          .flatMap(_.downField("renditions").values)
+          .flatten
+          // TODO: For some reason the following line failes
+          //       if I use .get[String]("id").toOption!?!
+          .flatMap(_.hcursor.downField("id").as[String].toOption)
+          .filter(_.contains("superJumbo"))
+          .map(hcursor.downField)
+          .flatMap(_.get[String]("url").toOption)
+          .toList
+      )
+  }
+
   def downloadAndProcessBriefing(targetDirectory: Path, briefing: Briefing): Unit = {
     val doc = briefing.fetchDoc
+    val data = briefingsData(doc)
+    data.map(json => {
+      write((targetDirectory/s"data${briefing.htmlFilename}.json").toString, json)  
+      parse(json) match {
+        case Right(obj) => {
+          for {
+            element <- doc.select("figure").iterator().asScala
+            url <- getImages(obj)
+          } {
+            element.appendElement(
+              f"""<img class="css-doesntmatter" src="${url}?quality=75&amp;auto=webp&amp;disable=upscale" srcset="" decoding="async" loading="lazy">"""
+            )
+          }
+        }
+        case Left(err) => error(s"Unable to find data for images: $err")
+      }
+    })
     write((targetDirectory/briefing.htmlFilename).toString, doc.toString())
   }
 

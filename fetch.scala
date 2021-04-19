@@ -67,7 +67,7 @@ object nytimes extends LogSupport {
   }
 
   def keyHasValue(key: String, value: String)(hcursor: ACursor) =
-    hcursor.get[String](key).toOption.fold(false)(_ == value)
+    hcursor.get[String](key).toOption.contains(value)
 
   // TODO: this code is nasty, but it was the first thing I go working. :D
   def getImages(json: Json): List[String] = {

@@ -160,12 +160,14 @@ object fetch extends LogSupport  {
     info("Downloading briefings")
     val doc = nytimes.fetchBriefingsDoc
     val briefings = nytimes.parseBriefings(doc)
+    val today = LocalDate.now
     info(f"Found ${briefings.length}")
 
     briefings
       .sortBy(_.date)
       .reverse
       .take(2)
+      .filterNot(_.date == today)
       .filterNot(briefing => isFile(targetDirectory/briefing.pdfFilename))
       .tapEach(briefing => {
         info(f"Processing ${briefing.htmlFilename}")

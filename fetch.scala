@@ -137,9 +137,9 @@ object nytimes extends LogSupport {
     doc.pipe(briefingsData)
       .map(parse)
       .getOrElse(Left("No Json to Parse"))
-      .map(insertLazyImages(doc))
       .fold(logErrToLeft("Unable to parse json"), v => Right(v))
       .toOption
+      .map(insertLazyImages(doc))
       .getOrElse(doc)
   }
 

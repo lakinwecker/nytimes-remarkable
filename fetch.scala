@@ -12,7 +12,6 @@ import scala.util.chaining._
 import sys.process._
 import wvlet.log.LogSupport
 
-
 import java.nio.file.{Paths, Files}
 import java.nio.charset.StandardCharsets
 
@@ -20,51 +19,58 @@ import java.time._
 import java.time.format._
 import java.io.File
 
-object nytimes extends LogSupport {
-  val baseUrl = "https://www.nytimes.com/"
-  val briefingsListings = "spotlight/us-briefing"
 
-  def dbg[A](f: A): A = { println(f); f }
-  def urlToName(s: String) = s.replaceAllLiterally(".html", "").split("-").map(_.capitalize).mkString(" ")
+
+object nytimes extends LogSupport {
+  object io {
+    def write(path: String, txt: String): Unit = {
+      Files.write(Paths.get(path), txt.getBytes(StandardCharsets.UTF_8))
+    }
+    def toPDF(targetDirectory: Path, briefing: Briefing): Unit = {
+      val inputFile = targetDirectory/briefing.htmlFilename
+      val outputFile = targetDirectory/briefing.pdfFilename
+      s"weasyprint $inputFile $outputFile".!
+    }
+  }
+
+  val baseUrl = "https://www.nytimes.com/"
+  val usBriefingUrl = "spotlight/us-briefing"
 
   case class Briefing(date: LocalDate, url: String, name: String, htmlFilename: String)  {
     def pdfFilename = htmlFilename.replaceAllLiterally(".html", ".pdf")
-    def fetchDoc = Jsoup.connect(s"$baseUrl$url").get()
   }
+  object Briefing {
+    def fetchUSSpotlight = Jsoup.connect(s"$baseUrl$usBriefingUrl").get()
+    def fetch(briefing: Briefing) = Jsoup.connect(s"$baseUrl${briefing.url}").get()
+    def urlToName(s: String) = s.replaceAllLiterally(".html", "").split("-").map(_.capitalize).mkString(" ")
 
-  def toBriefing(node: nodes.Element): Option[Briefing] = {
-    val url = node.attr("href")
-    val dateFormat = DateTimeFormatter.ofPattern("yyyy/MM/dd")
-    val dateString = url.stripPrefix("/").split('/').take(3).mkString("/")
-    val htmlFilename = url.split('/').lastOption
-    for {
-       date <- Try{LocalDate.parse(dateString, dateFormat)}.toOption
-       name <- htmlFilename.map(urlToName)
-       htmlFilename <- htmlFilename
-    } yield new Briefing(date, url, name, htmlFilename)
+    def from(node: nodes.Element): Option[Briefing] = {
+      val url = node.attr("href")
+      val dateFormat = DateTimeFormatter.ofPattern("yyyy/MM/dd")
+      val dateString = url.stripPrefix("/").split('/').take(3).mkString("/")
+      val htmlFilename = url.split('/').lastOption
+      for {
+         date <- Try{LocalDate.parse(dateString, dateFormat)}.toOption
+         name <- htmlFilename.map(urlToName)
+         htmlFilename <- htmlFilename
+      } yield new Briefing(date, url, name, htmlFilename)
+    }
 
+    def toDoc(doc: nodes.Document): List[Briefing] = 
+      doc.select("a").asScala
+        .filter(_.attr("href").contains("/briefing/"))
+        .filterNot(_.attr("href").contains("signup.html"))
+        .flatMap(Briefing.from)
+        .toList
   }
-
-  def fetchBriefingsDoc = Jsoup.connect(s"$baseUrl$briefingsListings").get()
-  def parseBriefings(doc: nodes.Document): List[Briefing] = 
-    doc.select("a").asScala
-      .filter(_.attr("href").contains("/briefing/"))
-      .filterNot(_.attr("href").contains("signup.html"))
-      .flatMap(toBriefing)
-      .toList
 
   val prefix = "window.__preloadedData = "
-  def briefingsData(doc: nodes.Document): Option[String] = {
+  def briefingsData(doc: nodes.Document): Option[String] =
     doc.select("script").asScala
       .filter(_.data().startsWith(prefix))
       .take(1)
       .headOption
       .map(_.data().replaceAllLiterally(prefix, "").dropRight(1))
-    }
-
-  def write(path: String, txt: String): Unit = {
-    Files.write(Paths.get(path), txt.getBytes(StandardCharsets.UTF_8))
-  }
 
   def keyHasValue(key: String, value: String)(hcursor: ACursor) =
     hcursor.get[String](key).toOption.contains(value)
@@ -105,38 +111,38 @@ object nytimes extends LogSupport {
       )
   }
 
-  def downloadAndProcessBriefing(targetDirectory: Path, briefing: Briefing): Unit = {
-    val doc = briefing.fetchDoc
-    val data = briefingsData(doc)
-    data.map(json => {
-      parse(json) match {
-        case Right(obj) => {
-          val images = getImages(obj).drop(1)
-          val elements = doc.select("""figure div[data-testid="lazyimage-container"]""").iterator().asScala
-          for {
-            (url, element) <- (images zip elements)
-          } {
-            element.attr("style", "height: auto")
-            val picture = element.appendElement("picture")
-            picture.attr("style", "opacity: 1; display: block; width: 100%")
-            val img = picture.appendElement("img")
-            img.attr("class", "css-doesntmattr");
-            img.attr("src", f"${url}?quality=75&amp;auto=webp&amp;disable=upscale")
-            img.attr("decoding", "async")
-            img.attr("style", "width:100%;vertical-align:top; height: auto; max-width: 100%")
-          }
-        }
-        case Left(err) => error(s"Unable to find data for images: $err")
+  def insertLazyImages(doc: nodes.Document)(json: Json): nodes.Document = {
+      val elements = doc.select("""figure div[data-testid="lazyimage-container"]""").iterator().asScala
+      val images = getImages(json).drop(1)
+      for {
+        (url, element) <- (images zip elements)
+      } {
+        element.attr("style", "height: auto")
+        val picture = element.appendElement("picture")
+        picture.attr("style", "opacity: 1; display: block; width: 100%")
+        val img = picture.appendElement("img")
+        img.attr("class", "css-doesntmattr");
+        img.attr("src", f"${url}?quality=75&amp;auto=webp&amp;disable=upscale")
+        img.attr("decoding", "async")
+        img.attr("style", "width:100%;vertical-align:top; height: auto; max-width: 100%")
       }
-    })
-    write((targetDirectory/briefing.htmlFilename).toString, doc.toString())
+      doc
   }
 
-  def toPDF(targetDirectory: Path, briefing: Briefing): Unit = {
-    val inputFile = targetDirectory/briefing.htmlFilename
-    val outputFile = targetDirectory/briefing.pdfFilename
-    s"weasyprint $inputFile $outputFile".!
+  def logErrToLeft[A, B](msg: String)(err: A): Either[A, B] =
+    Left(err.tap(err => error(s"$msg: $err")))
+
+  def downloadAndProcessBriefing(targetDirectory: Path, briefing: Briefing): nodes.Document = {
+    val doc = Briefing.fetch(briefing)
+    doc.pipe(briefingsData)
+      .map(parse)
+      .getOrElse(Left("No Json to Parse"))
+      .map(insertLazyImages(doc))
+      .fold(logErrToLeft("Unable to parse json"), v => Right(v))
+      .toOption
+      .getOrElse(doc)
   }
+
 }
 
 object fetch extends LogSupport  {
@@ -157,24 +163,21 @@ object fetch extends LogSupport  {
       mkdir! targetDirectory
     }
     info("Downloading briefings")
-    val doc = nytimes.fetchBriefingsDoc
-    val briefings = nytimes.parseBriefings(doc)
     val today = LocalDate.now
-    info(f"Found ${briefings.length}")
-
-    briefings
-      .sortBy(_.date)
-      .reverse
-      .take(2)
-      .filterNot(_.date == today)
+    nytimes.Briefing.fetchUSSpotlight
+      .pipe(nytimes.Briefing.toDoc)
+      .filter(_.date == today)
+      .tap(b => info(f"Found ${b.length} briefings"))
       .filterNot(briefing => isFile(targetDirectory/briefing.pdfFilename))
+      .tap(b => info(f"Updating ${b.length} briefings"))
       .tapEach(briefing => {
         info(f"Processing ${briefing.htmlFilename}")
-        nytimes.downloadAndProcessBriefing(targetDirectory, briefing)
+        val doc = nytimes.downloadAndProcessBriefing(targetDirectory, briefing)
+        nytimes.io.write((targetDirectory/briefing.htmlFilename).toString, doc.toString())
       })
       .tapEach(briefing => {
         info(f"Turning into pdf ${briefing.pdfFilename}")
-        nytimes.toPDF(targetDirectory, briefing)
+        nytimes.io.toPDF(targetDirectory, briefing)
       })
   }
 }

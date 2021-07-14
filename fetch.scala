@@ -6,9 +6,9 @@ import org.rogach.scallop._
 import io.circe._
 import io.circe.parser._
 import scala.collection.JavaConverters._
+import scala.util.chaining._
 import scala.util.control.Exception._
 import scala.util.Try
-import scala.util.chaining._
 import sys.process._
 import wvlet.log.LogSupport
 
@@ -29,7 +29,11 @@ object nytimes extends LogSupport {
     def toPDF(targetDirectory: Path, briefing: Briefing): Unit = {
       val inputFile = targetDirectory/briefing.htmlFilename
       val outputFile = targetDirectory/briefing.pdfFilename
-      s"weasyprint $inputFile $outputFile".!
+      s"weasyprint $inputFile $outputFile" ! ProcessLogger(line => ())
+    }
+    def uploadToRemarkable(targetDirectory: Path, briefing: Briefing): Unit = {
+      val targetFile = targetDirectory/briefing.pdfFilename
+      s"rmapi put $targetFile".!
     }
   }
 
@@ -68,7 +72,6 @@ object nytimes extends LogSupport {
   def briefingsData(doc: nodes.Document): Option[String] =
     doc.select("script").asScala
       .filter(_.data().startsWith(prefix))
-      .take(1)
       .headOption
       .map(_.data().replaceAllLiterally(prefix, "").dropRight(1))
 
@@ -129,15 +132,12 @@ object nytimes extends LogSupport {
       doc
   }
 
-  def logErrToLeft[A, B](msg: String)(err: A): Either[A, B] =
-    Left(err.tap(err => error(s"$msg: $err")))
-
   def downloadAndProcessBriefing(targetDirectory: Path, briefing: Briefing): nodes.Document = {
     val doc = Briefing.fetch(briefing)
     doc.pipe(briefingsData)
       .map(parse)
       .getOrElse(Left("No Json to Parse"))
-      .fold(logErrToLeft("Unable to parse json"), v => Right(v))
+      .tap(_.left.map(err => err.tap(err => error(s"Unable to parse JSON: $err"))))
       .toOption
       .map(insertLazyImages(doc))
       .getOrElse(doc)
@@ -178,6 +178,10 @@ object fetch extends LogSupport  {
       .tapEach(briefing => {
         info(f"Turning into pdf ${briefing.pdfFilename}")
         nytimes.io.toPDF(targetDirectory, briefing)
+      })
+      .tapEach(briefing => {
+        info(f"Uploading to remarkable ${briefing.pdfFilename}")
+        nytimes.io.uploadToRemarkable(targetDirectory, briefing)
       })
   }
 }

@@ -33,7 +33,7 @@ object nytimes extends LogSupport {
     }
     def uploadToRemarkable(targetDirectory: Path, briefing: Briefing): Unit = {
       val targetFile = targetDirectory/briefing.pdfFilename
-      s"rmapi put $targetFile".!
+      s"rmapi put $targetFile" ! ProcessLogger(line => ())
     }
   }
 

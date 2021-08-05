@@ -115,8 +115,11 @@ object nytimes extends LogSupport {
   }
 
   def insertLazyImages(doc: nodes.Document)(json: Json): nodes.Document = {
-      val elements = doc.select("""figure div[data-testid="lazyimage-container"]""").iterator().asScala
-      val images = getImages(json).drop(1)
+      val elements = doc.select("""figure div[data-testid="lazyimage-container"]""").iterator().asScala.to(List)
+      var images = getImages(json)
+      if (images.length > elements.length) {
+        images = images.drop(1);
+      }
       for {
         (url, element) <- (images zip elements)
       } {
